@@ -37,7 +37,7 @@ jobs:
   mcp-conformance:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -79,21 +79,21 @@ jobs:
   mcp-inspector:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
       # The Inspector CLI is a Node binary installed with npm.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       # Keyed on the file that pins the version, so a pin bump reinstalls and
       # nothing else does.
       - name: Restore MCP Inspector install
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: node_modules/.cache/mcp-inspector
           key: mcp-inspector-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('packages/mcp-conformance/src/inspector.ts') }}

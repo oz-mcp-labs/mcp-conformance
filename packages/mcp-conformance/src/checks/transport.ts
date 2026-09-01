@@ -119,3 +119,39 @@ export const sessionHeaderAbsentOrEchoed: Check = {
     return ctx.pass(`minted and honored Mcp-Session-Id (${sessionId.length} chars)`)
   },
 }
+
+export const initializeSessionIdIssued: Check = {
+  id: 'initialize-session-id-issued',
+  title: 'initialize issues an MCP session id',
+  requirement:
+    'The legacy initialize response carries a non-empty visible-ASCII Mcp-Session-Id header for clients that require one to continue bootstrap.',
+  async run(ctx: CheckContext): Promise<CheckResult> {
+    const init = await ctx.rpc('initialize', {
+      protocolVersion: '2025-11-25',
+      capabilities: {},
+      clientInfo: { name: 'mcp-conformance', version: '0.1.0' },
+    })
+    const { result, problem } = jsonRpcResult(init)
+    if (!result) {
+      return ctx.fail(
+        `initialize failed before a session id could be checked: ${problem}`,
+        'Return a successful legacy initialize response before assigning the Mcp-Session-Id header.',
+      )
+    }
+
+    const sessionId = init.headers.get('mcp-session-id')
+    if (!sessionId) {
+      return ctx.fail(
+        'initialize returned no Mcp-Session-Id header',
+        'Assign an opaque Mcp-Session-Id on every legacy initialize response. The transport makes this optional, but ChatGPT was observed aborting immediately after a successful initialize when it was absent and continuing when it was present.',
+      )
+    }
+    if (!/^[\x21-\x7e]+$/.test(sessionId)) {
+      return ctx.fail(
+        `Mcp-Session-Id contains characters outside visible ASCII: ${JSON.stringify(sessionId)}`,
+        'Use an opaque visible-ASCII session identifier such as a UUID.',
+      )
+    }
+    return ctx.pass(`initialize issued Mcp-Session-Id (${sessionId.length} chars)`)
+  },
+}

@@ -93,6 +93,7 @@ export type Mutation =
   | 'getReturnsHtml'
   | 'getReturnsOpenSseStream'
   | 'deleteReturns500'
+  | 'omitSessionId'
   | 'noServerDiscover'
   | 'noResultType'
   | 'noCacheHints'
@@ -106,8 +107,11 @@ export type Mutation =
   | 'noChallengeHeader'
   | 'corsMissingHeaders'
   | 'crossOriginAsRedirect'
+  | 'staleVirtualIssuer'
+  | 'authorizeCrossOriginRedirect'
   | 'noPathSuffixedPrm'
   | 'noPkceS256'
+  | 'omitRfc9207Cimd'
   | 'requireSession'
   | 'loggingSetLevelUnimplemented'
 
@@ -149,6 +153,9 @@ export function createExampleServer(options: ExampleServerOptions = {}) {
   const origin = options.origin ?? 'https://reference.test'
   const path = options.path ?? '/mcp'
   const authorizationServerOrigin = options.authorizationServerOrigin ?? origin
+  const advertisedAuthorizationServer = broken.staleVirtualIssuer
+    ? 'https://auth.reference.test'
+    : authorizationServerOrigin
   const segment = path.replace(/^\/+/, '').replace(/\/+$/, '')
   let listCalls = 0
 
@@ -313,7 +320,9 @@ export function createExampleServer(options: ExampleServerOptions = {}) {
             },
           },
           200,
-          broken.requireSession ? { 'mcp-session-id': 'sess-reference' } : {},
+          broken.omitSessionId && !broken.requireSession
+            ? {}
+            : { 'mcp-session-id': 'sess-reference' },
         )
       }
       case 'server/discover':
@@ -373,19 +382,25 @@ export function createExampleServer(options: ExampleServerOptions = {}) {
     const asRoot = '/.well-known/oauth-authorization-server'
     const prmDocument = {
       resource: `${origin}${path}`,
-      authorization_servers: [authorizationServerOrigin],
+      authorization_servers: [advertisedAuthorizationServer],
       bearer_methods_supported: ['header'],
       scopes_supported: ['mcp:tools'],
     }
     const asDocument = {
-      issuer: authorizationServerOrigin,
-      authorization_endpoint: `${authorizationServerOrigin}/oauth/authorize`,
-      token_endpoint: `${authorizationServerOrigin}/oauth/token`,
-      registration_endpoint: `${authorizationServerOrigin}/oauth/register`,
+      issuer: advertisedAuthorizationServer,
+      authorization_endpoint: `${advertisedAuthorizationServer}/oauth/authorize`,
+      token_endpoint: `${advertisedAuthorizationServer}/oauth/token`,
+      registration_endpoint: `${advertisedAuthorizationServer}/oauth/register`,
       response_types_supported: ['code'],
       grant_types_supported: ['authorization_code', 'refresh_token'],
       code_challenge_methods_supported: broken.noPkceS256 ? ['plain'] : ['S256'],
       scopes_supported: ['mcp:tools'],
+      ...(broken.omitRfc9207Cimd
+        ? {}
+        : {
+            authorization_response_iss_parameter_supported: true,
+            client_id_metadata_document_supported: true,
+          }),
     }
 
     if (url.pathname === prmRoot) return json(prmDocument)
@@ -393,7 +408,8 @@ export function createExampleServer(options: ExampleServerOptions = {}) {
       if (broken.noPathSuffixedPrm) return json({ error: 'not_found' }, 404)
       return json(prmDocument)
     }
-    const onAuthorizationServer = url.origin === new URL(authorizationServerOrigin).origin
+    const onAuthorizationServer = url.origin === new URL(advertisedAuthorizationServer).origin
+      || (broken.staleVirtualIssuer && url.origin === new URL(origin).origin)
     if (onAuthorizationServer && (url.pathname === asRoot || url.pathname === `${asRoot}/${segment}`)) {
       if (broken.crossOriginAsRedirect) {
         return new Response(null, { status: 308, headers: { location: `https://auth.elsewhere.test${asRoot}` } })
@@ -401,6 +417,19 @@ export function createExampleServer(options: ExampleServerOptions = {}) {
       return json(asDocument)
     }
     if (onAuthorizationServer && url.pathname === '/.well-known/openid-configuration') return json(asDocument)
+    if (
+      url.origin === new URL(origin).origin &&
+      url.pathname === '/oauth/authorize' &&
+      request.method === 'HEAD'
+    ) {
+      if (broken.authorizeCrossOriginRedirect) {
+        return new Response(null, {
+          status: 307,
+          headers: { location: 'https://auth.reference.test/oauth/authorize' },
+        })
+      }
+      return new Response(null, { status: 200 })
+    }
     return json({ error: 'not_found' }, 404)
   }
 

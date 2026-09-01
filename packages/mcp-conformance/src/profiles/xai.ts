@@ -79,16 +79,23 @@ const OBSERVED_DCR: Citation = {
   note: 'POST /oauth/register on the authorization server with a https://grok.com/... redirect URI returns 201 with a client_id. The leg after discovery is verified working.',
 }
 
+const OBSERVED_VIRTUAL_AS: Citation = {
+  kind: 'observed',
+  ref: 'docs/evidence/grok-connector.md section 8',
+  retrieved: '2026-09-01',
+  note: 'Grok treated the MCP resource origin as the authorization server and would not cross to the backing authorization service for metadata or authorize. The working shape advertises the resource origin, serves a matching issuer and same-origin OAuth endpoints, and reverse-proxies authorize instead of redirecting it.',
+}
+
 export const grokConnectorProfile: ClientProfile = {
   id: 'grok-connector',
   displayName: 'Grok custom connector (grok.com)',
   vendor: 'xAI',
   summary:
-    'A custom connector added at grok.com/connectors or from the cloud console. The MCP client and the whole OAuth dance run on xAI backend infrastructure, so CORS never applies. It runs RFC 9728 discovery from the WWW-Authenticate challenge, supports dynamic client registration, and - unlike Claude - refuses to follow a cross-origin redirect for authorization-server metadata, falling back to the path-suffixed form on the resource origin. grok.com is also an MCP Apps host.',
+    'A custom connector added at grok.com/connectors or from the cloud console. The MCP client and the whole OAuth dance run on xAI backend infrastructure, so CORS never applies. It runs RFC 9728 discovery from the WWW-Authenticate challenge, treats the MCP resource origin as a virtual authorization server, and refuses cross-origin hops for metadata or authorize. grok.com is also an MCP Apps host.',
   acceptedProtocolRevisions: [],
   supportsModernEra: false,
   transports: ['streamable-http', 'http-sse-pair'],
-  authStrategies: ['oauth-dcr', 'oauth-manual-client', 'static-bearer', 'custom-headers', 'none'],
+  authStrategies: ['oauth-cimd', 'oauth-dcr', 'oauth-manual-client', 'static-bearer', 'custom-headers', 'none'],
   discoverySequence: [
     {
       method: 'GET',
@@ -116,6 +123,13 @@ export const grokConnectorProfile: ClientProfile = {
       path: '/.well-known/oauth-authorization-server/<mcp path>',
       note: 'The fallback after refusing the cross-origin redirect. It 404d, and discovery dead-ended.',
       sources: [OBSERVED_TRACE],
+      confidence: 'observed',
+    },
+    {
+      method: 'HEAD',
+      path: '<resource origin>/oauth/authorize',
+      note: 'The authorization endpoint must stay on the virtual authorization-server origin; a cross-origin redirect back to the backing authorization service is rejected before the OAuth popup can complete.',
+      sources: [OBSERVED_VIRTUAL_AS],
       confidence: 'observed',
     },
     {
@@ -167,6 +181,20 @@ export const grokConnectorProfile: ClientProfile = {
       rationale:
         'Grok was watched refusing to follow a 308 to a different-origin authorization server. This is the single most expensive fact in the registry: three sessions debugged the server before it was found.',
       sources: [OBSERVED_TRACE],
+    },
+    {
+      check: 'as-metadata-origin-consistent',
+      confidence: 'observed',
+      rationale:
+        'Serving metadata on the resource origin is insufficient when it still names another origin as issuer or publishes cross-origin endpoints. Grok treats the resource origin itself as the authorization server.',
+      sources: [OBSERVED_VIRTUAL_AS],
+    },
+    {
+      check: 'authorization-endpoint-same-origin',
+      confidence: 'observed',
+      rationale:
+        'Grok would not carry the handshake across a redirect from the advertised resource-origin authorization endpoint to the backing authorization service, so authorize must be reverse-proxied on origin.',
+      sources: [OBSERVED_VIRTUAL_AS],
     },
     {
       check: 'as-metadata-pkce-s256',
@@ -255,7 +283,7 @@ export const grokConnectorProfile: ClientProfile = {
       question:
         'Does Grok refresh an expired access token against the authorization server, or does it require re-authorization?',
       experiment:
-        'Connect a gateway URL as a custom connector, wait past the one-hour mat_ expiry, and issue a tool call. Watch AuthKit for a refresh_token grant at /oauth/token. Success means the gateway needs no long-lived credential; failure or a NEEDS_REAUTH state means one must be minted.',
+        'Connect the URL as a custom connector, wait past the access token\'s expiry, and issue a tool call. Watch the authorization server for a refresh_token grant at /oauth/token. Success means no long-lived credential is needed; failure or a NEEDS_REAUTH state means one must be minted.',
       impact:
         'This is the open gap in docs/evidence/grok-connector.md section 4. The connector service exposes GetValidAccessToken, an InvalidateOAuthToken RPC, a refresh_token flag on the list request, and a NEEDS_REAUTH status - strongly suggesting refresh is implemented server-side - but none of that is confirmation against this authorization server.',
     },

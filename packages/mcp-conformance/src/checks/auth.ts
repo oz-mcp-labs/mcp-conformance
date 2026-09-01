@@ -220,6 +220,124 @@ export const asMetadataBothPaths: Check = {
   },
 }
 
+export const asMetadataOriginConsistent: Check = {
+  id: 'as-metadata-origin-consistent',
+  title: 'the virtual authorization server is self-consistent',
+  requirement:
+    'Protected-resource metadata names the MCP resource origin as its authorization server, whose issuer and OAuth endpoints all remain on that same origin.',
+  async run(ctx: CheckContext): Promise<CheckResult> {
+    const origin = new URL(ctx.target.url).origin
+    const segment = endpointPathSegment(ctx.target.url)
+    const prmPaths = [
+      '/.well-known/oauth-protected-resource',
+      ...(segment ? [`/.well-known/oauth-protected-resource/${segment}`] : []),
+    ]
+    const asPaths = [
+      '/.well-known/oauth-authorization-server',
+      ...(segment ? [`/.well-known/oauth-authorization-server/${segment}`] : []),
+    ]
+    const problems: string[] = []
+
+    for (const path of prmPaths) {
+      const res = await ctx.sendOrigin(path, { anonymous: true })
+      if (res.status !== 200) {
+        problems.push(`${path}: HTTP ${res.status}`)
+        continue
+      }
+      const doc = res.json as { authorization_servers?: unknown } | undefined
+      const issuers = Array.isArray(doc?.authorization_servers)
+        ? doc.authorization_servers.filter((value): value is string => typeof value === 'string')
+        : []
+      if (!issuers.includes(origin)) {
+        problems.push(
+          `${path}: authorization_servers=${JSON.stringify(issuers)}, expected ${origin}`,
+        )
+      }
+    }
+
+    for (const path of asPaths) {
+      const res = await ctx.sendOrigin(path, { anonymous: true })
+      if (res.status !== 200) {
+        problems.push(`${path}: HTTP ${res.status}`)
+        continue
+      }
+      const doc = res.json as Record<string, unknown> | undefined
+      if (doc?.issuer !== origin) {
+        problems.push(`${path}: issuer=${JSON.stringify(doc?.issuer)}, expected ${origin}`)
+      }
+      for (const field of [
+        'authorization_endpoint',
+        'token_endpoint',
+        'registration_endpoint',
+      ] as const) {
+        const endpoint = doc?.[field]
+        if (typeof endpoint !== 'string' || !sameOrigin(origin, endpoint)) {
+          problems.push(`${path}: ${field}=${JSON.stringify(endpoint)} is not on ${origin}`)
+        }
+      }
+    }
+
+    if (problems.length > 0) {
+      return ctx.fail(
+        `virtual authorization server is inconsistent: ${problems.join('; ')}`,
+        'Advertise the MCP resource origin in authorization_servers and serve metadata whose issuer, authorization_endpoint, token_endpoint, and registration_endpoint use that exact origin. Reverse-proxy /oauth/* to the backing authorization service instead of exposing its origin to the client.',
+      )
+    }
+    return ctx.pass(`PRM, issuer, and OAuth endpoints consistently use ${origin}`)
+  },
+}
+
+export const authorizationEndpointSameOrigin: Check = {
+  id: 'authorization-endpoint-same-origin',
+  title: 'the authorization endpoint stays on the resource origin',
+  requirement:
+    'The authorization endpoint advertised by the resource-origin metadata is reachable there and does not redirect a probe to another origin.',
+  async run(ctx: CheckContext): Promise<CheckResult> {
+    const origin = new URL(ctx.target.url).origin
+    const metadata = await ctx.sendOrigin('/.well-known/oauth-authorization-server', {
+      anonymous: true,
+    })
+    if (metadata.status !== 200) {
+      return ctx.fail(
+        `resource-origin authorization-server metadata returned HTTP ${metadata.status}`,
+        'Serve authorization-server metadata with HTTP 200 on the MCP resource origin before advertising a same-origin authorization endpoint.',
+      )
+    }
+    const doc = metadata.json as { authorization_endpoint?: unknown } | undefined
+    const endpoint = doc?.authorization_endpoint
+    if (typeof endpoint !== 'string' || !sameOrigin(origin, endpoint)) {
+      return ctx.fail(
+        `authorization_endpoint=${JSON.stringify(endpoint)} is not on ${origin}`,
+        'Advertise a same-origin /oauth/authorize endpoint and reverse-proxy it to the backing authorization service.',
+      )
+    }
+
+    const res = await ctx.sendOrigin(endpoint, { method: 'HEAD', anonymous: true })
+    if (
+      res.error ||
+      res.status === 0 ||
+      res.status === 404 ||
+      res.status === 405 ||
+      res.status >= 500
+    ) {
+      return ctx.fail(
+        `HEAD ${endpoint} returned ${res.error ? `an error: ${res.error}` : `HTTP ${res.status}`}`,
+        'Serve HEAD and GET on the advertised authorization endpoint from the resource origin. A missing route or upstream failure makes clients reject the virtual authorization server before showing login.',
+      )
+    }
+    if (isRedirect(res.status)) {
+      const location = res.headers.get('location')
+      if (!location || !sameOrigin(origin, location)) {
+        return ctx.fail(
+          `HEAD ${endpoint} redirected cross-origin with HTTP ${res.status} to ${location ?? '(no Location)'}`,
+          'Reverse-proxy the authorization endpoint instead of redirecting it to the backing authorization-server origin.',
+        )
+      }
+    }
+    return ctx.pass(`HEAD ${endpoint} stayed on ${origin} with HTTP ${res.status}`)
+  },
+}
+
 export const asMetadataNoCrossOriginRedirect: Check = {
   id: 'as-metadata-no-cross-origin-redirect',
   title: 'metadata discovery never redirects cross-origin',
@@ -313,6 +431,70 @@ export const asMetadataPkceS256: Check = {
         ? `S256 not advertised: ${seen.join('; ')}`
         : 'no authorization-server metadata document was reachable to check',
       'Add "S256" to code_challenge_methods_supported on the authorization server named by protected-resource metadata. Do not diagnose the MCP resource origin unless it is also the advertised issuer.',
+    )
+  },
+}
+
+export const asMetadataRfc9207Cimd: Check = {
+  id: 'as-metadata-rfc9207-cimd',
+  title: 'authorization metadata advertises RFC 9207 and CIMD',
+  requirement:
+    'The advertised authorization-server metadata sets authorization_response_iss_parameter_supported and client_id_metadata_document_supported to true.',
+  async run(ctx: CheckContext): Promise<CheckResult> {
+    const issuers = await advertisedAuthorizationServers(ctx)
+    const candidates = new Set<string>()
+    for (const issuer of issuers) {
+      for (const url of authorizationServerMetadataUrls(issuer)) candidates.add(url)
+    }
+    if (issuers.length === 0) {
+      const segment = endpointPathSegment(ctx.target.url)
+      candidates.add('/.well-known/oauth-authorization-server')
+      if (segment) candidates.add(`/.well-known/oauth-authorization-server/${segment}`)
+      candidates.add('/.well-known/openid-configuration')
+    }
+
+    const seen: string[] = []
+    for (const url of candidates) {
+      const res = await ctx.sendOrigin(url, { anonymous: true })
+      if (res.status !== 200) {
+        seen.push(`${url}: HTTP ${res.status}`)
+        continue
+      }
+      const doc = res.json as
+        | {
+            authorization_response_iss_parameter_supported?: unknown
+            client_id_metadata_document_supported?: unknown
+          }
+        | undefined
+      const missing = [
+        ...(doc?.authorization_response_iss_parameter_supported === true
+          ? []
+          : ['authorization_response_iss_parameter_supported']),
+        ...(doc?.client_id_metadata_document_supported === true
+          ? []
+          : ['client_id_metadata_document_supported']),
+      ]
+      if (missing.length === 0) return ctx.pass(`${url} advertises RFC 9207 and CIMD`)
+      seen.push(`${url}: missing true ${missing.join(', ')}`)
+    }
+
+    return ctx.fail(
+      seen.length > 0
+        ? `RFC 9207/CIMD compatibility flags absent: ${seen.join('; ')}`
+        : 'no authorization-server metadata document was reachable to check',
+      'Set authorization_response_iss_parameter_supported and client_id_metadata_document_supported to true in the authorization-server metadata, then ensure the real authorize flow honors both claims.',
+    )
+  },
+}
+
+export const oauthAuthorizationCodeFlow: Check = {
+  id: 'oauth-authorization-code-flow',
+  title: 'a real client completes the OAuth authorization-code flow',
+  requirement:
+    'A real connector completes authorization with an exact RFC 9207 iss value, CIMD-derived redirect registration, and an access-token response whose aud equals the requested MCP resource.',
+  async run(ctx: CheckContext): Promise<CheckResult> {
+    return ctx.skip(
+      'manual-only: completing this flow requires a real third-party connector, browser consent, and a minted access token',
     )
   },
 }

@@ -63,12 +63,17 @@ export type CheckId =
   | 'sse-get-stream'
   | 'delete-method-handled'
   | 'session-header-absent-or-echoed'
+  | 'initialize-session-id-issued'
   // --- auth / discovery -------------------------------------------------
   | 'unauthenticated-401-challenge'
   | 'prm-document-served'
   | 'as-metadata-both-paths'
   | 'as-metadata-no-cross-origin-redirect'
   | 'as-metadata-pkce-s256'
+  | 'as-metadata-origin-consistent'
+  | 'authorization-endpoint-same-origin'
+  | 'as-metadata-rfc9207-cimd'
+  | 'oauth-authorization-code-flow'
   // --- CORS -------------------------------------------------------------
   | 'cors-preflight'
   | 'cors-allowed-headers'
@@ -123,6 +128,8 @@ export interface CheckParams {
 
 /** How a client authenticates against a server. */
 export type AuthStrategy =
+  /** OAuth 2.1 + PKCE where the HTTPS client_id is its metadata document. */
+  | 'oauth-cimd'
   /** OAuth 2.1 + PKCE with RFC 7591 dynamic client registration. */
   | 'oauth-dcr'
   /** OAuth 2.1 + PKCE against a client id the operator registers by hand. */

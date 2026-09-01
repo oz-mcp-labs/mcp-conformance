@@ -18,7 +18,7 @@
  *   HTTP+SSE pair transport.
  */
 
-import type { Citation, ClientProfile } from '../types.ts'
+import type { Citation, ClientProfile, Requirement } from '../types.ts'
 
 const RETRIEVED = '2026-08-28'
 
@@ -85,16 +85,83 @@ const SESSION_ISSUE: Citation = {
   note: 'Reporter observes a new MCP session initialized for every tool call; no maintainer reply as of retrieval. Session affinity must never be required.',
 }
 
+const OBSERVED_CHATGPT_SESSION_BOOTSTRAP: Citation = {
+  kind: 'observed',
+  ref: 'production trace, plus an initialize-session-id regression test',
+  retrieved: '2026-09-01',
+  note: 'ChatGPT completed OAuth and received initialize over HTTP 200 from a hosted server, then stopped before notifications/initialized when no Mcp-Session-Id was present. The same account reached the apex surface that issues one; assigning a UUID fixed hosted bootstrap.',
+}
+
+const OBSERVED_CHATGPT_OAUTH_HANDSHAKE: Citation = {
+  kind: 'observed',
+  ref: 'docs/evidence/grok-connector.md section 8',
+  retrieved: '2026-09-01',
+  note: 'ChatGPT used a stable redirect URI only after RFC 9207 was advertised and iss was returned, preferred client_id https://chatgpt.com/oauth/client.json through CIMD, and expected the requested resource in the token response aud.',
+}
+
+const CHATGPT_OAUTH_REQUIREMENTS: Requirement[] = [
+  {
+    check: 'unauthenticated-401-challenge',
+    confidence: 'documented',
+    rationale:
+      'A 401 without WWW-Authenticate is listed as the reason ChatGPT will not restart OAuth. The documented challenge form carries resource_metadata and a scope parameter.',
+    sources: [PLUGINS_AUTH, PLUGINS_TROUBLESHOOTING],
+  },
+  {
+    check: 'prm-document-served',
+    confidence: 'documented',
+    rationale:
+      'RFC 9728 protected resource metadata with resource and authorization_servers is required.',
+    sources: [PLUGINS_AUTH],
+  },
+  {
+    check: 'as-metadata-pkce-s256',
+    confidence: 'documented',
+    rationale:
+      'The one unambiguous hard gate in the OpenAI auth documentation: a server whose AS metadata omits the field or does not advertise S256 is unsupported.',
+    sources: [PLUGINS_AUTH],
+  },
+  {
+    check: 'as-metadata-rfc9207-cimd',
+    confidence: 'observed',
+    rationale:
+      'The working handshake advertises RFC 9207 issuer identification and client-id metadata documents. Without both, ChatGPT fell back to a per-callback DCR redirect that did not match the registered redirect set.',
+    sources: [OBSERVED_CHATGPT_OAUTH_HANDSHAKE],
+  },
+  {
+    check: 'session-header-absent-or-echoed',
+    confidence: 'inferred',
+    rationale:
+      'ChatGPT is reported to initialize a new MCP session for every tool call, so a server must not require affinity beyond the opaque id it issued for that initialize.',
+    sources: [SESSION_ISSUE],
+  },
+  {
+    check: 'initialize-session-id-issued',
+    confidence: 'observed',
+    rationale:
+      'A production ChatGPT connector completed OAuth and received initialize, then aborted before notifications/initialized when the hosted runtime issued no session id. Assigning one made the bootstrap shape match the working apex connector.',
+    sources: [OBSERVED_CHATGPT_SESSION_BOOTSTRAP],
+  },
+  {
+    check: 'oauth-authorization-code-flow',
+    confidence: 'observed',
+    manual: true,
+    rationale:
+      'Connect the target in ChatGPT and complete consent; capture the callback and token exchange, then verify callback iss exactly matches the advertised issuer, CIMD supplied the accepted redirect URI, and token aud equals the requested MCP resource. Metadata checks alone cannot prove these runtime values.',
+    sources: [OBSERVED_CHATGPT_OAUTH_HANDSHAKE],
+  },
+]
+
 export const chatgptPluginsProfile: ClientProfile = {
   id: 'chatgpt-plugins',
   displayName: 'ChatGPT plugins (Apps SDK / custom connectors)',
   vendor: 'OpenAI',
   summary:
-    'The connector inside ChatGPT, formerly split between the Apps SDK and custom connectors. Streamable HTTP at a stable /mcp URL, reached server-side from OpenAI infrastructure. OAuth 2.1 with PKCE S256 is the only credential path - static API keys are explicitly unsupported. It renders MCP Apps widgets, with both the standard and a legacy OpenAI spelling of every UI key.',
+    'The connector inside ChatGPT, formerly split between the Apps SDK and custom connectors. Streamable HTTP at a stable /mcp URL, reached server-side from OpenAI infrastructure. OAuth 2.1 with PKCE S256 is the only credential path; CIMD is preferred, and the legacy initialize response must issue a session id. It renders MCP Apps widgets, with both the standard and a legacy OpenAI spelling of every UI key.',
   acceptedProtocolRevisions: ['2025-11-25', '2025-06-18', '2025-03-26'],
   supportsModernEra: false,
   transports: ['streamable-http'],
-  authStrategies: ['oauth-dcr', 'oauth-manual-client', 'none'],
+  authStrategies: ['oauth-cimd', 'oauth-dcr', 'oauth-manual-client', 'none'],
   discoverySequence: [
     {
       method: 'GET',
@@ -111,9 +178,16 @@ export const chatgptPluginsProfile: ClientProfile = {
       confidence: 'documented',
     },
     {
+      method: 'GET',
+      path: 'https://chatgpt.com/oauth/client.json',
+      note: 'CIMD is preferred: the HTTPS client_id is its metadata document, which the authorization server fetches during authorize and treats as the client registration.',
+      sources: [PLUGINS_AUTH, OBSERVED_CHATGPT_OAUTH_HANDSHAKE],
+      confidence: 'observed',
+    },
+    {
       method: 'POST',
-      path: '<registration_endpoint> or none',
-      note: 'CIMD preferred - ChatGPT client_id is https://chatgpt.com/oauth/client.json. Dynamic registration happens once per MCP server connection and is then reused.',
+      path: '<registration_endpoint> (fallback)',
+      note: 'Dynamic registration is the fallback and is reused per MCP server connection.',
       sources: [PLUGINS_AUTH],
       confidence: 'documented',
     },
@@ -167,33 +241,7 @@ export const chatgptPluginsProfile: ClientProfile = {
         },
       ],
     },
-    {
-      check: 'unauthenticated-401-challenge',
-      confidence: 'documented',
-      rationale:
-        'A 401 without WWW-Authenticate is listed as the reason ChatGPT will not restart OAuth. The documented challenge form carries resource_metadata and a scope parameter.',
-      sources: [PLUGINS_AUTH, PLUGINS_TROUBLESHOOTING],
-    },
-    {
-      check: 'prm-document-served',
-      confidence: 'documented',
-      rationale: 'RFC 9728 protected resource metadata with resource and authorization_servers is required.',
-      sources: [PLUGINS_AUTH],
-    },
-    {
-      check: 'as-metadata-pkce-s256',
-      confidence: 'documented',
-      rationale:
-        'The one unambiguous hard gate in the OpenAI auth documentation: a server whose AS metadata omits the field or does not advertise S256 is unsupported.',
-      sources: [PLUGINS_AUTH],
-    },
-    {
-      check: 'session-header-absent-or-echoed',
-      confidence: 'inferred',
-      rationale:
-        'ChatGPT is reported to initialize a new MCP session for every tool call, so a server that requires session affinity would lose state between calls. Inferred rather than observed: the evidence is an unanswered community bug report, and no OpenAI document mentions mcp-session-id at all.',
-      sources: [SESSION_ISSUE],
-    },
+    ...CHATGPT_OAUTH_REQUIREMENTS,
     {
       check: 'tool-annotations-present',
       confidence: 'documented',
@@ -302,7 +350,7 @@ export const chatgptDeepResearchProfile: ClientProfile = {
   acceptedProtocolRevisions: ['2025-11-25', '2025-06-18', '2025-03-26'],
   supportsModernEra: false,
   transports: ['streamable-http'],
-  authStrategies: ['oauth-dcr', 'oauth-manual-client', 'none'],
+  authStrategies: ['oauth-cimd', 'oauth-dcr', 'oauth-manual-client', 'none'],
   discoverySequence: [],
   requirements: [
     {
@@ -333,12 +381,7 @@ export const chatgptDeepResearchProfile: ClientProfile = {
       rationale: 'A declared output schema per tool is required so clients can validate the result shape.',
       sources: [DEEP_RESEARCH],
     },
-    {
-      check: 'unauthenticated-401-challenge',
-      confidence: 'documented',
-      rationale: 'Same auth machinery as the plugins profile.',
-      sources: [PLUGINS_AUTH],
-    },
+    ...CHATGPT_OAUTH_REQUIREMENTS,
   ],
   quirks: [
     {

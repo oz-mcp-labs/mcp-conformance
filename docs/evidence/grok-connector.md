@@ -161,3 +161,52 @@ model, which matches Grok's observed behavior:
 4. **Token endpoint intolerance.** JSON bodies must not 500, and a
    `client_secret_basic` client that puts `client_id` only in the
    `Authorization: Basic` header must not be rejected for a missing `client_id`.
+
+## 8. The virtual authorization server: four dead-ends past discovery
+
+Serving discovery documents on the resource origin (section 5) is necessary and
+not sufficient. A client that treats the *resource* origin as its authorization
+server — Grok's observed behavior, and ChatGPT's — walks four more steps, and
+each was found broken in turn. These are the source for
+`as-metadata-origin-consistent`, `authorization-endpoint-same-origin`,
+`as-metadata-rfc9207-cimd` and `oauth-authorization-code-flow`.
+
+1. **The metadata was served on-origin but still named another issuer.**
+   Protected-resource metadata advertising a separate authorization-server
+   origin, with no on-origin RFC 8414 document, dies exactly the way section 5's
+   308 did. The working shape: the protected-resource document names the MCP
+   resource origin, the origin serves RFC 8414 metadata whose `issuer` is that
+   same origin, and `/oauth/*` is **reverse-proxied** to the backing
+   authorization service with `X-Forwarded-Host`. Anything bundled into a
+   deployed artifact needs a redeploy to pick this up.
+2. **RFC 9207 was not advertised and `iss` was not returned on the authorize
+   redirect.** ChatGPT uses a stable redirect URI only when both are true.
+   Otherwise it runs dynamic client registration and then authorizes with a
+   per-callback URI that is not in the client's own registered `redirect_uris`,
+   which the authorization server rejects.
+3. **`/oauth/authorize` was still a cross-origin 307.** Grok had already been
+   watched refusing a 308 for metadata; a backend `HEAD` of authorize that 307s
+   is the same shape of risk. Reverse-proxy authorize rather than redirecting
+   it. Rewrite the login links inside the returned HTML to the real
+   authorization host, and keep session cookies host-only — a `Domain=`-scoped
+   cookie on a wildcard tenant domain is stealable by any tenant.
+4. **CIMD was not advertised**, the client's metadata document (for ChatGPT,
+   `https://chatgpt.com/oauth/client.json`) was not fetched at authorize, and
+   the token response omitted `aud`.
+
+Custom domains outside the wildcard the virtual-issuer allowlist covers remain a
+known gap.
+
+### ChatGPT session bootstrap
+
+Separately observed on the same surfaces: ChatGPT completed OAuth, received a
+successful `initialize` over HTTP 200, and then **stopped before sending
+`notifications/initialized`** when the response carried no `Mcp-Session-Id`. The
+same account reached a sibling surface that did issue one and completed
+bootstrap. The legacy transport makes the header optional; this client treats it
+as required. Assigning an opaque UUID at `initialize` fixed it, and
+`initialize-session-id-issued` exists so it cannot regress.
+
+A stateless server that deliberately issues no session id is spec-valid and
+still fails this check. That is the correct outcome: record it as a known gap
+and leave the ChatGPT profiles unclaimed, rather than waiving the check.

@@ -77,11 +77,15 @@ const EXPECTED_PASS: CheckId[] = [
   'sse-get-stream',
   'delete-method-handled',
   'session-header-absent-or-echoed',
+  'initialize-session-id-issued',
   'unauthenticated-401-challenge',
   'prm-document-served',
   'as-metadata-both-paths',
   'as-metadata-no-cross-origin-redirect',
   'as-metadata-pkce-s256',
+  'as-metadata-origin-consistent',
+  'authorization-endpoint-same-origin',
+  'as-metadata-rfc9207-cimd',
   'cors-preflight',
   'cors-allowed-headers',
   'cors-exposed-headers',
@@ -108,6 +112,8 @@ describe('the reference server satisfies the registry', () => {
       'tool-description-limit',
       'tool-count-limit',
       'deep-research-search-fetch-contract',
+      // This is rendered only as a manual runbook step and is never executed.
+      'oauth-authorization-code-flow',
     ])
     const missing = Object.keys(ALL_CHECKS).filter((id) => !covered.has(id))
     expect(missing).toEqual([])
@@ -190,6 +196,7 @@ const MUTATIONS: { mutation: Mutation; catches: CheckId; expect?: string }[] = [
   { mutation: 'unknownMethod500', catches: 'unknown-method-error-code', expect: 'HTTP 500' },
   { mutation: 'getReturnsHtml', catches: 'sse-get-stream', expect: 'text/html' },
   { mutation: 'deleteReturns500', catches: 'delete-method-handled', expect: 'HTTP 500' },
+  { mutation: 'omitSessionId', catches: 'initialize-session-id-issued', expect: 'no Mcp-Session-Id' },
   { mutation: 'noServerDiscover', catches: 'server-discover' },
   { mutation: 'noResultType', catches: 'modern-result-type', expect: 'resultType' },
   { mutation: 'noCacheHints', catches: 'modern-cache-hints', expect: 'ttlMs' },
@@ -211,8 +218,11 @@ const MUTATIONS: { mutation: Mutation; catches: CheckId; expect?: string }[] = [
     catches: 'as-metadata-no-cross-origin-redirect',
     expect: 'auth.elsewhere.test',
   },
+  { mutation: 'staleVirtualIssuer', catches: 'as-metadata-origin-consistent', expect: 'authorization_servers' },
+  { mutation: 'authorizeCrossOriginRedirect', catches: 'authorization-endpoint-same-origin', expect: 'redirected cross-origin' },
   { mutation: 'noPathSuffixedPrm', catches: 'prm-document-served', expect: 'HTTP 404' },
   { mutation: 'noPkceS256', catches: 'as-metadata-pkce-s256', expect: 'plain' },
+  { mutation: 'omitRfc9207Cimd', catches: 'as-metadata-rfc9207-cimd', expect: 'missing true' },
 ]
 
 describe('each check catches the behavior it claims to', () => {
@@ -240,6 +250,7 @@ describe('each check catches the behavior it claims to', () => {
       'unknownMethod500',
       'getReturnsHtml',
       'deleteReturns500',
+      'omitSessionId',
       'noServerDiscover',
       'noResultType',
       'noCacheHints',
@@ -253,8 +264,11 @@ describe('each check catches the behavior it claims to', () => {
       'noChallengeHeader',
       'corsMissingHeaders',
       'crossOriginAsRedirect',
+      'staleVirtualIssuer',
+      'authorizeCrossOriginRedirect',
       'noPathSuffixedPrm',
       'noPkceS256',
+      'omitRfc9207Cimd',
     ]
     expect(declared.filter((m) => !covered.has(m))).toEqual([])
   })
@@ -274,6 +288,26 @@ describe('a mutation does not spuriously fail unrelated checks', () => {
     // bug rather than a total outage.
     const result = await runCheck('modern-result-type', { break: { headerMismatchOnLegacy: true } })
     expect(result.status).toBe('pass')
+  })
+
+  test('a stateless server still passes the spec-level session coherence check', async () => {
+    const result = await runCheck('session-header-absent-or-echoed', {
+      break: { omitSessionId: true },
+    })
+    expect(result.status).toBe('pass')
+    expect(result.detail).toContain('stateless')
+  })
+
+  test('the stale virtual-AS shim fails only the new self-consistency check', async () => {
+    const options = { break: { staleVirtualIssuer: true } } as const
+    for (const id of [
+      'as-metadata-both-paths',
+      'as-metadata-no-cross-origin-redirect',
+      'as-metadata-pkce-s256',
+    ] as const) {
+      expect((await runCheck(id, options)).status).toBe('pass')
+    }
+    expect((await runCheck('as-metadata-origin-consistent', options)).status).toBe('fail')
   })
 })
 

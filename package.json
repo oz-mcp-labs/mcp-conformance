@@ -1,0 +1,17 @@
+{
+  "name": "mcp-conformance-workspace",
+  "private": true,
+  "type": "module",
+  "workspaces": ["packages/*", "example"],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p packages/mcp-conformance && tsc --noEmit -p example",
+    "test": "bun test packages/mcp-conformance/test example/test/conformance.test.ts",
+    "test:conformance": "bun test packages/mcp-conformance/test example/test/conformance.test.ts",
+    "test:inspector": "cd example && bun run scripts/inspector.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "bun-types": "^1.3.9",
+    "typescript": "^5.8.0"
+  }
+}

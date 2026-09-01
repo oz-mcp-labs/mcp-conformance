@@ -1,0 +1,19 @@
+{
+  "name": "example-mcp-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test test/conformance.test.ts",
+    "test:inspector": "bun run scripts/inspector.ts"
+  },
+  "dependencies": {
+    "mcp-conformance": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "bun-types": "^1.3.9",
+    "typescript": "^5.8.0"
+  }
+}

@@ -1,0 +1,106 @@
+name: mcp
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: "1.3.9"
+  NODE_VERSION: "22"
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────
+  # Gate 1: cross-client MCP conformance.
+  #
+  # Runs the profile registry against every MCP surface, entirely offline -
+  # the handlers are driven in process, so this needs no network, no
+  # deployment, and no credentials.
+  #
+  # It is a separate job from the unit tests on purpose. A dedicated job gives
+  # the compatibility matrix its own red/green signal in the checks list, which
+  # is the point: cross-client support is meant to be a property CI enforces,
+  # not a thing rediscovered per client at the moment a connector fails.
+  #
+  # Add a step per surface you serve. If a surface has a second runtime (a
+  # Python implementation, a vendored copy), run it here too and make the
+  # interpreter a hard requirement rather than an optional one - a suite that
+  # silently skips itself is exactly the drift this job exists to catch.
+  # ──────────────────────────────────────────────────────────────────────
+  mcp-conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Registry integrity and check mutation tests
+        working-directory: packages/mcp-conformance
+        run: bun test
+
+      - name: Every MCP surface against the client matrix
+        working-directory: example
+        run: bun test test/conformance.test.ts
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Gate 2: the official MCP Inspector CLI.
+  #
+  # Distinct from `mcp-conformance` on purpose. That job runs OUR checks with
+  # OUR probe, which cannot catch a case where our reading of the spec is
+  # wrong; this one runs the reference client - the official SDK under a
+  # scriptable CLI - and asks whether the client everyone debugs against can
+  # actually use these servers. In the codebase this template came from, the
+  # first run answered no: every route declared the `logging` capability and
+  # answered `logging/setLevel` with -32601, so the Inspector dropped the
+  # session before its first tools/list, and no in-house check noticed.
+  #
+  # It also runs the CLI's schema-portability lint (`--strict`), held at zero
+  # errors AND zero warnings: a warning there names a construct real clients
+  # mishandle, on the endpoint whose whole premise is working in every client.
+  #
+  # The CLI is not a workspace dependency - it installs ~117 MB that every
+  # `bun install` would otherwise pay for - so `bun run test:inspector`
+  # installs it pinned into node_modules/.cache and runs the suites with
+  # MCP_INSPECTOR_REQUIRED=1, which turns a missing binary into a failure
+  # instead of a skip. Without that flag this job can pass by testing nothing.
+  # ──────────────────────────────────────────────────────────────────────
+  mcp-inspector:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      # The Inspector CLI is a Node binary installed with npm.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Keyed on the file that pins the version, so a pin bump reinstalls and
+      # nothing else does.
+      - name: Restore MCP Inspector install
+        uses: actions/cache@v4
+        with:
+          path: node_modules/.cache/mcp-inspector
+          key: mcp-inspector-${{ runner.os }}-node${{ env.NODE_VERSION }}-${{ hashFiles('packages/mcp-conformance/src/inspector.ts') }}
+
+      - name: Install (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: MCP Inspector against every MCP surface
+        working-directory: example
+        run: bun run test:inspector

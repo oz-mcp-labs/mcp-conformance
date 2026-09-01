@@ -1,0 +1,48 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "mcp-conformance-workspace",
+      "devDependencies": {
+        "@types/node": "^24.0.0",
+        "bun-types": "^1.3.9",
+        "typescript": "^5.8.0",
+      },
+    },
+    "example": {
+      "name": "example-mcp-server",
+      "version": "0.1.0",
+      "dependencies": {
+        "mcp-conformance": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^24.0.0",
+        "bun-types": "^1.3.9",
+        "typescript": "^5.8.0",
+      },
+    },
+    "packages/mcp-conformance": {
+      "name": "mcp-conformance",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/node": "^24.0.0",
+        "bun-types": "^1.3.9",
+        "typescript": "^5.8.0",
+      },
+    },
+  },
+  "packages": {
+    "@types/node": ["@types/node@24.13.3", "", { "dependencies": { "undici-types": "~7.18.0" } }, "sha512-Dh8vAsV36ig5wa9OX4pXvMc9D3Veibfw2wix0CUwYODLD8nkj9UsLjASr49nPg+2eKzxhBV+v7L8pXvT4e639Q=="],
+
+    "bun-types": ["bun-types@1.4.0", "", { "dependencies": { "@types/node": "*" } }, "sha512-iIKw23BspnQQYd3prITOBxeUsxBHnwzX6YJfGMuNOZzeNcMmVqzIIVGRm1l69ogaPQmb4wB6BN8mA5bE9YuC5Q=="],
+
+    "example-mcp-server": ["example-mcp-server@workspace:example"],
+
+    "mcp-conformance": ["mcp-conformance@workspace:packages/mcp-conformance"],
+
+    "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "undici-types": ["undici-types@7.18.2", "", {}, "sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w=="],
+  }
+}

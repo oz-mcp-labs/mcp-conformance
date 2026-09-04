@@ -144,3 +144,7 @@ the hash of `src/inspector.ts`, so a pin bump reinstalls and nothing else does.
 Without the binary the suite skips; `MCP_INSPECTOR_REQUIRED=1` — which the runner
 script and the CI job both set — turns a missing binary into a failure, so the
 gate cannot pass by testing nothing.
+
+## License
+
+Apache License 2.0. See [LICENSE](./LICENSE).

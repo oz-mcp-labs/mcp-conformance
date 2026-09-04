@@ -22,6 +22,21 @@ answered `logging/setLevel` with `-32601`, so the Inspector dropped the session
 before its first `tools/list`. Every check in gate 1 passed against it.
 `example/test/inspector.test.ts` reproduces that failure on purpose.
 
+## The agent skill
+
+`skills/mcp-conformance/SKILL.md` is an Agent Skill covering all three layers:
+the smoke probe, the specification suite, and the two gates here. It carries the
+things a fresh agent otherwise gets wrong - which failures can gate and which
+cannot, the wire contract for 2026-07-28, and the era-detection traps. Copy the
+directory into `.claude/skills/` (or any skills directory your agent reads).
+
+```
+skills/mcp-conformance/
+  SKILL.md                          the workflow, and how to read a result
+  reference/2026-07-28-wire.md      the normative wire contract + era detection
+  reference/tooling.md              CLI surfaces, exit codes, and known bugs
+```
+
 ## Quick start
 
 ```bash

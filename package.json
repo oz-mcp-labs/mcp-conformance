@@ -1,6 +1,7 @@
 {
   "name": "mcp-conformance-workspace",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "workspaces": ["packages/*", "example"],
   "scripts": {
